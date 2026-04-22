@@ -145,12 +145,167 @@
       cursor: pointer;
     }
     .milestone-check.done { background: var(--green); border-color: var(--green); }
+
+    .note-input {
+      width: 100%; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--white10); background: rgba(255,255,255,0.03);
+      color: var(--cream); font-size: 14px; font-family: var(--font-body);
+      outline: none; resize: vertical; min-height: 80px; display: block;
+      margin-bottom: 8px; line-height: 1.5;
+    }
+    .note-input::placeholder { color: var(--cream35); }
+    .note-add-btn {
+      padding: 7px 16px; border-radius: 6px;
+      background: rgba(232,213,181,0.1); border: 1px solid rgba(232,213,181,0.2);
+      color: var(--cream); font-size: 13px; cursor: pointer; font-weight: 500;
+      font-family: var(--font-body);
+    }
+    .note-card { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 12px 14px; border-left: 3px solid rgba(232,213,181,0.25); margin-bottom: 8px; }
+    .note-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .note-ts { font-size: 10px; color: var(--cream35); font-family: var(--font-mono); }
+    .note-del { font-size: 11px; color: var(--cream25); background: none; border: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-family: var(--font-body); }
+    .note-text { font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body>
 <div id="app"></div>
 
 <script>
+// ── Explosion ──
+function playExplosion() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const sr = ac.sampleRate;
+    // Main rumble: 2.5s shaped white noise
+    const dur = 2.5;
+    const buf = ac.createBuffer(1, sr * dur, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / sr;
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t / dur, 1.2) * (0.7 + 0.3 * Math.sin(t * 9));
+    }
+    const noise = ac.createBufferSource();
+    noise.buffer = buf;
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(700, ac.currentTime);
+    lp.frequency.exponentialRampToValueAtTime(60, ac.currentTime + 1.8);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0, ac.currentTime); g.gain.linearRampToValueAtTime(2.8, ac.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + dur);
+    noise.connect(lp); lp.connect(g); g.connect(ac.destination);
+    ac.resume().then(() => noise.start());
+    // Bass thump
+    const osc = ac.createOscillator();
+    osc.frequency.setValueAtTime(160, ac.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(18, ac.currentTime + 0.9);
+    const og = ac.createGain();
+    og.gain.setValueAtTime(0, ac.currentTime); og.gain.linearRampToValueAtTime(3.2, ac.currentTime + 0.01);
+    og.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.9);
+    osc.connect(og); og.connect(ac.destination);
+    osc.start(); osc.stop(ac.currentTime + 0.9);
+    // Mid crackle
+    const buf2 = ac.createBuffer(1, sr * 1.8, sr);
+    const d2 = buf2.getChannelData(0);
+    for (let i = 0; i < d2.length; i++) d2[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d2.length, 1.8);
+    const crackle = ac.createBufferSource(); crackle.buffer = buf2;
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.6;
+    const cg = ac.createGain();
+    cg.gain.setValueAtTime(1.0, ac.currentTime);
+    cg.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 1.8);
+    crackle.connect(bp); bp.connect(cg); cg.connect(ac.destination);
+    crackle.start();
+  } catch(e) {}
+}
+
+function triggerExplosion(ox, oy) {
+  const cvs = document.createElement('canvas');
+  const W = window.innerWidth, H = window.innerHeight;
+  // Low-res canvas scaled up = free pixel art
+  const PX = 8;
+  const LW = Math.ceil(W / PX) + 2, LH = Math.ceil(H / PX) + 2;
+  const lox = Math.round(ox / PX), loy = Math.round(oy / PX);
+  cvs.width = LW; cvs.height = LH;
+  cvs.style.cssText = `position:fixed;inset:0;z-index:9999;pointer-events:none;width:${W}px;height:${H}px;image-rendering:pixelated;image-rendering:crisp-edges`;
+  document.body.appendChild(cvs);
+  const ctx = cvs.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const PAL = ['#FFFFFF','#FFFF99','#FFFF00','#FFD700','#FF8C00','#FF4500','#CC2200','#881100'];
+  const maxR = Math.sqrt(Math.max(lox, LW - lox) ** 2 + Math.max(loy, LH - loy) ** 2) + 2;
+  // Bright lobes (hotspots) that give the lumpy blob look
+  const hotspots = Array.from({length: 6}, (_, i) => ({
+    a: (i / 6) * Math.PI * 2 + Math.random() * 1.1,
+    r: 0.2 + Math.random() * 0.4
+  }));
+  // Square debris chunks
+  const debris = Array.from({length: 28}, () => {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 4.5 + 1;
+    return { x: lox, y: loy, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 1.2,
+             w: Math.ceil(Math.random() * 2), h: Math.ceil(Math.random() * 2),
+             color: PAL[4 + Math.floor(Math.random() * 3)],
+             life: 1, decay: 0.01 + Math.random() * 0.018 };
+  });
+  const EXPAND = 18, HOLD = 12, FADE = 38;
+  const TOTAL = EXPAND + HOLD + FADE;
+  let t = 0;
+  function frame() {
+    ctx.clearRect(0, 0, LW, LH);
+    t++;
+    let curR, dissolve;
+    if (t <= EXPAND)             { curR = maxR * (t / EXPAND); dissolve = 1; }
+    else if (t <= EXPAND + HOLD) { curR = maxR; dissolve = 1; }
+    else                         { curR = maxR; dissolve = 1 - (t - EXPAND - HOLD) / FADE; }
+    if (dissolve > 0) {
+      const steps = Math.ceil(curR);
+      for (let dy = -steps; dy <= steps; dy++) {
+        for (let dx = -steps; dx <= steps; dx++) {
+          const px = lox + dx, py = loy + dy;
+          if (px < 0 || py < 0 || px >= LW || py >= LH) continue;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx);
+          // Lumpy edge using layered sin/cos
+          const edge = 1 + 0.18 * Math.sin(angle * 3 + t * 0.28)
+                         + 0.12 * Math.cos(angle * 7 - t * 0.42)
+                         + 0.07 * Math.sin(angle * 13 + t * 0.17);
+          if (d > curR * edge) continue;
+          // Dissolve: randomly skip pixels as it fades
+          if (dissolve < 1 && Math.random() > dissolve * dissolve) continue;
+          let brightness = 1 - d / curR;
+          // Boost brightness near each hotspot lobe
+          for (const h of hotspots) {
+            const hx = lox + Math.cos(h.a) * curR * h.r;
+            const hy = loy + Math.sin(h.a) * curR * h.r;
+            const hd = Math.sqrt((px - hx) ** 2 + (py - hy) ** 2);
+            brightness += 0.48 * Math.max(0, 1 - hd / (curR * 0.23));
+          }
+          // Flicker during hold phase
+          if (t > EXPAND && t <= EXPAND + HOLD)
+            brightness += 0.12 * Math.sin(t * 4.1 + dx * 0.9 + dy * 0.6);
+          brightness = Math.max(0, Math.min(1, brightness));
+          const ci = Math.floor((1 - brightness) * (PAL.length - 1));
+          ctx.fillStyle = PAL[Math.max(0, Math.min(PAL.length - 1, ci))];
+          ctx.fillRect(px, py, 1, 1);
+        }
+      }
+    }
+    let anyAlive = t < TOTAL;
+    debris.forEach(p => {
+      if (p.life <= 0) return;
+      anyAlive = true;
+      p.x += p.vx; p.y += p.vy; p.vy += 0.07; p.vx *= 0.98;
+      p.life -= p.decay;
+      if (p.life > 0 && Math.random() < p.life) {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(Math.round(p.x), Math.round(p.y), p.w, p.h);
+      }
+    });
+    if (anyAlive || dissolve > 0) requestAnimationFrame(frame);
+    else cvs.remove();
+  }
+  requestAnimationFrame(frame);
+}
+
 // ── Config ──
 const GOALS = [
   { id:"running", label:"Running", icon:"🏃", color:"#E86A4B", phases:[{from:0,to:3,t:1},{from:4,to:99,t:2}], note:"Physio return-to-run plan → 10k by end June" },
@@ -168,21 +323,28 @@ const MILESTONES = [
   { id:"goal_tracker_app", label:"Build Goal Tracker App", icon:"📱", color:"#8B7EC8", done:true },
   { id:"finance_plan", label:"Savings & Tax Plan with Ellie", icon:"💰", color:"#5BA88C", note:"ISA, pension allowances, wedding buffer" },
   { id:"golf_lessons", label:"Golf Lessons", icon:"📋", color:"#4A8C5C", note:"7 lessons by July", count:7 },
+  { id:"reading", label:"Read a book on executive presence / gravitas", icon:"📖", color:"#D4856A" },
 ];
 
 const START = new Date(2026, 3, 20);
 const END = new Date(2026, 5, 8);
 const TOTAL_WEEKS = Math.ceil((END - START) / (7*864e5));
 const SKEY = "goals-2026-pwa";
+const NOTES_KEY = "goals-2026-notes";
 
 // ── State ──
 let state = { weeklyChecks:{}, weights:{}, milestones:{goal_tracker_app:true}, lessonCount:0 };
+let notes = [];
 let selectedWeek = Math.max(0, Math.floor((new Date() - START) / (7*864e5)));
 let currentView = "weekly";
 
 function save() { localStorage.setItem(SKEY, JSON.stringify(state)); }
 function load() {
   try { const s = localStorage.getItem(SKEY); if(s) state = JSON.parse(s); } catch(e) {}
+}
+function saveNotes() { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }
+function loadNotes() {
+  try { const s = localStorage.getItem(NOTES_KEY); if(s) notes = JSON.parse(s); } catch(e) {}
 }
 
 function getTarget(g, w) {
@@ -201,11 +363,17 @@ function getChecks(gId, w) {
   if(typeof stored==="number") return Array.from({length:t},(_,i)=>i<stored);
   return Array(t).fill(false);
 }
-function toggleCheck(gId, w, idx) {
+function toggleCheck(e, gId, w, idx) {
   const checks = [...getChecks(gId, w)];
-  checks[idx] = !checks[idx];
+  const checking = !checks[idx];
+  checks[idx] = checking;
   if(!state.weeklyChecks[w]) state.weeklyChecks[w] = {};
   state.weeklyChecks[w][gId] = checks;
+  if (checking) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    playExplosion();
+    triggerExplosion(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
   save(); render();
 }
 function doneCount(gId, w) { return getChecks(gId, w).filter(Boolean).length; }
@@ -231,7 +399,7 @@ function checkboxHTML(checked, color, gId, w, idx) {
   const border = checked ? 'none' : '2px solid rgba(255,255,255,0.15)';
   const shadow = checked ? `0 0 8px ${color}33` : 'none';
   const svg = checked ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5L5.5 11L12 3" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : '';
-  return `<button class="checkbox${checked?' checked':''}" style="background:${bg};border:${border};box-shadow:${shadow}" onclick="toggleCheck('${gId}',${w},${idx})">${svg}</button>`;
+  return `<button class="checkbox${checked?' checked':''}" style="background:${bg};border:${border};box-shadow:${shadow}" onclick="toggleCheck(event,'${gId}',${w},${idx})">${svg}</button>`;
 }
 
 // ── Render ──
@@ -268,6 +436,7 @@ function render() {
         <button class="tab${currentView==='weekly'?' active':''}" onclick="switchView('weekly')">Weekly</button>
         <button class="tab${currentView==='overview'?' active':''}" onclick="switchView('overview')">Overview</button>
         <button class="tab${currentView==='milestones'?' active':''}" onclick="switchView('milestones')">Milestones</button>
+        <button class="tab${currentView==='notes'?' active':''}" onclick="switchView('notes')">Notes</button>
       </div>
     </div>`;
 
@@ -381,6 +550,30 @@ function render() {
   });
   html += `</div>`;
 
+  // ── Notes View ──
+  html += `<div class="body view-section${currentView==='notes'?' active':''}">
+    <p class="section-head">Notes</p>
+    <div style="margin-bottom:20px">
+      <textarea class="note-input" id="noteInput" placeholder="Write a note…"></textarea>
+      <button class="note-add-btn" onclick="addNote()">Add Note</button>
+    </div>`;
+  if(notes.length === 0) {
+    html += `<p style="font-size:13px;color:var(--cream35);text-align:center;padding:20px 0">No notes yet</p>`;
+  } else {
+    [...notes].reverse().forEach(n => {
+      const d = new Date(n.ts);
+      const ts = d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      html += `<div class="note-card">
+        <div class="note-meta">
+          <span class="note-ts">${ts}</span>
+          <button class="note-del" onclick="deleteNote(${n.id})">Delete</button>
+        </div>
+        <div class="note-text">${n.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
   document.getElementById('app').innerHTML = html;
 }
 
@@ -397,9 +590,21 @@ window.logWeight = w => {
 window.clearWeight = w => { delete state.weights[w]; save(); render(); };
 window.toggleMilestone = id => { state.milestones[id] = !state.milestones[id]; save(); render(); };
 window.setLessons = n => { state.lessonCount = Math.max(0, Math.min(7, n)); save(); render(); };
+window.addNote = () => {
+  const el = document.getElementById('noteInput');
+  const text = el?.value.trim();
+  if(!text) return;
+  notes.push({ id: Date.now(), ts: new Date().toISOString(), text });
+  saveNotes(); render();
+};
+window.deleteNote = id => {
+  notes = notes.filter(n => n.id !== id);
+  saveNotes(); render();
+};
 
 // ── Init ──
 load();
+loadNotes();
 render();
 
 // Register service worker
